@@ -1,0 +1,12 @@
+
+torch
+
+argparse
+wave
+pyaudio
+# TTS
+soundfile
+sentence-transformers
+faster-whisper
+openai
+speechrecognition
