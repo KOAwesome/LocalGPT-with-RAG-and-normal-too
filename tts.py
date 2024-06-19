@@ -1,2 +1,2 @@
-import TTS as t
+import tts as t
 

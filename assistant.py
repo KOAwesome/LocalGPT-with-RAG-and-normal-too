@@ -1,11 +1,11 @@
-from distutils import util #hoping this will work
+from distutils import util 
 import torch
 import os
 import argparse
 import wave
 import pyaudio
-from TTS.tts.xtts import Xtts#doubtfulk
-from TTS.tts.configs.xtts_config import XTTSConfig
+from TTS.tts.models.xtts import Xtts
+from TTS.tts.configs.xtts_config import XttsConfig
 
 import soundfile as sf
 from sentence_transformers import SentenceTransformer, util
@@ -27,7 +27,7 @@ def open_file(file_path):
     with open(file_path, "r", encoding="utf-8") as file:
         return file.read()
     
-client = OpenAI(base_url="http:localhos:1234/v1", api_key="not-needed")
+client = OpenAI(base_url="http:localhost:1234/v1", api_key="not-needed")
 
 def play_audio(file_path):
     wf = wave.open(file_path, "rb")
@@ -53,11 +53,13 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 output_dir = "outputs"
 os.makedirs(output_dir, exist_ok=True)
 
-xtts_config = XTTSConfig()#device=device)
-xtts_config.load_json("TTS/tts/configs/config.json")#no idea where to get this config file
+xtts_config = XttsConfig()
+xtts_config.load_json("/Users/nani/git/XTTS-v2/config.json")#no idea where to get this config file
 
 xtts_model = Xtts.init_from_config(xtts_config)
-xtts_model.load_checkpoint("TTS/tts/weights/checkpoint_262000.pth", eval=True)# again no idea
+# this is original
+# xtts_model.load_checkpoint("TTS/tts/weights/checkpoint_262000.pth", eval=True)# again no idea
+xtts_model.load_checkpoint(xtts_config, checkpoint_dir="/", eval=True)
 xtts_model.cuda()
 
 def process_and_play(prompt, audio_file_path):
