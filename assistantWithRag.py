@@ -6,8 +6,9 @@ import pyaudio
 import wave
 from TTS.tts.models.xtts import Xtts
 from TTS.tts.configs.xtts_config import XttsConfig
-from transformers import AutoModel, AutoTokenizer
-import torch.nn.functional as F
+# from transformers import AutoModel, AutoTokenizer
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import soundfile as sf
 from sentence_transformers import SentenceTransformer, util
 import whisper
@@ -21,10 +22,7 @@ NEON_GREEN = "\033[92m"
 RESET_COLOR = "\033[0m"
 
 model_size = "medium.en"
-model_name = "all-MiniLM-L6-v2"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
 device = "mps" if torch.backends.mps.is_available() else "cpu"
-model = AutoModel.from_pretrained(model_name).to(device)
 whisper_model = whisper.load_model("base")
 
 def open_file(file_path):
@@ -83,17 +81,18 @@ def process_and_play(prompt, audio_file_path):
     except Exception as e:
         print(f"Error during audio generation: {e}")
 
-def get_relevant_context(user_input, vault_embeddings, vault_context, model, tokenizer, top_k=3):
-    if vault_embeddings.nelement() == 0:
+def get_relevant_context(user_input, vault_embeddings, vault_context, model, top_k=3):
+    if vault_embeddings.nelement() == 0: # if tensor has any elements
         return []
-
-    input_ids = tokenizer.encode(user_input, return_tensors="pt").to(device)
-    input_embedding = model(input_ids)[0].mean(dim=1)
-
-    cos_scores = F.cosine_similarity(input_embedding, vault_embeddings)
+    
+    input_embedding = model.encode([user_input])  # Encode user input
+    input_embedding = torch.from_numpy(input_embedding)  # Convert to PyTorch tensor
+    input_embedding = input_embedding.to(device) 
+    vault_embeddings = vault_embeddings.to(device) #encode user context
+    cos_scores = util.cos_sim(input_embedding, vault_embeddings)[0] #compute cosine similarity b/w input and vault embvedding
     top_k = min(top_k, len(cos_scores))
-    top_indices = torch.topk(cos_scores, k=top_k)[1].tolist()
-    relevant_context = [vault_context[i].strip() for i in top_indices]
+    top_indices = torch.topk(cos_scores,k=top_k)[1].tolist() #get top k indices
+    relevant_context = [vault_context[i].strip() for i in top_indices] #get top k context
     return relevant_context
 
 def chatgpt_streamed(user_input, system_message, conversation_history, bot_name, vault_embeddings, vault_context, model):
@@ -135,7 +134,7 @@ def chatgpt_streamed(user_input, system_message, conversation_history, bot_name,
 #     return transcription.strip()
 
 def transcribe_with_whisper(audio_file):
-    transcription = whisper_model.transcribe(audio_file, fp16=torch.backends.mps.is_available())
+    transcription = whisper_model.transcribe(audio_file, fp32=torch.backends.mps.is_available())
     return transcription["text"]
 
 
@@ -166,14 +165,14 @@ def record_audio(file_path):
 def user_chatbot_conversation():
     conversation_history = []
     system_message = open_file("/Users/nani/git/LocalGPTwithRAG/chatbot2.txt")
-    model_name = "all-MiniLM-L6-v2"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(device)
+    model = SentenceTransformer("all-MiniLM-L6-v2").to(
+        device=device
+    )# remove to()
     vault_content = []
     if os.path.exists("vault.txt"):
-        with open("vault.txt", "r", encoding="utf-8") as vault_file:
-            vault_content = vault_file.readlines()
-    vault_embeddings = model.encode(vault_content, device=device) if vault_content else []
+        with open ("vault.txt", "r", encoding="utf-8") as vault_file:
+            vault_content = vault_file.readlines()  
+    vault_embeddings = model.encode(vault_content) if vault_content else []
     vault_embeddings_tensor = torch.tensor(vault_embeddings, device=device)
     while True:
         audio_file = "vault_audio.wav"
