@@ -2,8 +2,8 @@ from distutils import util
 import torch
 import os
 import argparse
-import wave
 import pyaudio
+import wave
 from TTS.tts.models.xtts import Xtts
 from TTS.tts.configs.xtts_config import XttsConfig
 
@@ -12,7 +12,7 @@ from sentence_transformers import SentenceTransformer, util
 from faster_whisper import WhisperModel
 from openai import OpenAI
 import speech_recognition as sr
-
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 PINK = "\033[95m"
 CYAN = "\033[96m"
@@ -21,13 +21,15 @@ RESET_COLOR = "\033[0m"
 
 model_size = "medium.en"
 # what is cuda
-whisper_model = WhisperModel(model_size, device="cuda", compute_type="float16")
+# whisper_model = WhisperModel(model_size, device="cuda", compute_type="float16")
+whisper_model = WhisperModel(model_size, device="cpu", compute_type="float32")
+
 
 def open_file(file_path):
     with open(file_path, "r", encoding="utf-8") as file:
         return file.read()
     
-client = OpenAI(base_url="http:localhost:1234/v1", api_key="not-needed")
+client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-needed")
 
 def play_audio(file_path):
     wf = wave.open(file_path, "rb")
@@ -59,8 +61,8 @@ xtts_config.load_json("/Users/nani/git/XTTS-v2/config.json")#no idea where to ge
 xtts_model = Xtts.init_from_config(xtts_config)
 # this is original
 # xtts_model.load_checkpoint("TTS/tts/weights/checkpoint_262000.pth", eval=True)# again no idea
-xtts_model.load_checkpoint(xtts_config, checkpoint_dir="/", eval=True)
-xtts_model.cuda()
+xtts_model.load_checkpoint(xtts_config, checkpoint_dir="/Users/nani/git/XTTS-v2", eval=True)
+# xtts_model.cuda()
 
 def process_and_play(prompt, audio_file_path):
     tts_model = xtts_model
@@ -68,7 +70,7 @@ def process_and_play(prompt, audio_file_path):
         output = tts_model.synthesize(prompt,xtts_config, speaker_wav=audio_file_path, gpt_cond_len=24,
                                       temperature=0.6,  language="en", speed=1.2)
         synthesized_audio = output["wav"]
-        src_path = f'{output_dir}/output.wav'
+        src_path = f'./outputs/output_audio.wav'
         sample_rate = xtts_config.audio.sample_rate
         sf.write(src_path, synthesized_audio, sample_rate)
 
@@ -84,12 +86,13 @@ def get_relevant_context(user_input, vault_embeddings, vault_context, model, top
     input_embedding = model.encode([user_input]) #encode user context
     cos_scores = util.cos_sim(input_embedding, vault_embeddings)[0] #compute cosine similarity b/w input and vault embvedding
     top_k = min(top_k, len(cos_scores))
-    top_indices = torch.topk(cos_scores, top_k)[1].tolist() #get top k indices
+    top_indices = torch.topk(cos_scores,k=top_k)[1].tolist() #get top k indices
     relevant_context = [vault_context[i].strip() for i in top_indices] #get top k context
     return relevant_context
 
 def chatgpt_streamed(user_input, system_message, conversation_history, bot_name, vault_embeddings, vault_context, model):
     relevant_context = get_relevant_context(user_input, vault_embeddings, vault_context, model)
+    # print(relevant_context) #debugging
     user_input_with_context = user_input
     if relevant_context:
         user_input_with_context = "\n".join(relevant_context) + "\n\n" + user_input
@@ -103,7 +106,7 @@ def chatgpt_streamed(user_input, system_message, conversation_history, bot_name,
     line_buffer = ""
     for chunk in streamed_completion:
         delta_content = chunk.choices[0].delta.content
-        if delta_content:
+        if delta_content is not None:
             line_buffer += delta_content
             if '\n' in line_buffer:
                 lines = line_buffer.split('\n')
@@ -115,12 +118,14 @@ def chatgpt_streamed(user_input, system_message, conversation_history, bot_name,
         print(NEON_GREEN + line_buffer + RESET_COLOR)
         full_response += line_buffer
     return full_response
+    # print("Line"+line_buffer)#debugging
+    # print("full"+full_response)#debugging
 
 def transcribe_with_whisper(audio_file):
-    segments,info = whisper_model.transcribe(audio_file, beam_size=5)
+    segments, info = whisper_model.transcribe(audio_file, beam_size=5)
     transcription = ""
     for segment in segments:
-        transcription += segment["text"] + ""#segment.text
+        transcription += segment.text + ""
     return transcription.strip()
 
 def record_audio(file_path):
@@ -148,11 +153,12 @@ def record_audio(file_path):
 
 def user_chatbot_conversation():
     conversation_history = []
-    system_message = open_file("chatbot2.txt")
+    system_message = open_file("/Users/nani/git/LocalGPTwithRAG/chatbot2.txt")
     model = SentenceTransformer("all-MiniLM-L6-v2")
     vault_content = []
     if os.path.exists("vault.txt"):
-        vault_content = vault_file.readlines()
+        with open ("vault.txt", "r", encoding="utf-8") as vault_file:
+            vault_content = vault_file.readlines()  
     vault_embeddings = model.encode(vault_content) if vault_content else []
     vault_embeddings_tensor = torch.tensor(vault_embeddings)
     while True:
@@ -188,20 +194,22 @@ def user_chatbot_conversation():
             with open("vault.txt", "a", encoding="utf-8") as vault_file:
                 vault_file.write(vault_input + "\n")
             print("Info inserted successfully")
-            vault_content = open("vault.txt", "r", encoding="utf-8").readLines()
+            vault_content = open("vault.txt", "r", encoding="utf-8").readlines()#Lines
             vault_embeddings= model.encode(vault_content)
             vault_embeddings_tensor = torch.tensor(vault_embeddings)
             continue
+        
         print(CYAN + "You:" + user_input + RESET_COLOR) #idk indentation
         conversation_history.append({"role": "user", "content" : user_input})
-    #246
-    print(PINK + "Emma:" + RESET_COLOR)
-    chatbot_response = chatgpt_streamed(user_input, system_message, conversation_history, "chatbot", vault_embeddings_tensor, vault_content, model)
-    conversation_history.append({"role": "assistant", "content": chatbot_response})
-    prompt2 = chatbot_response
-    audio_file_pth2 = "/Users/nani/git/LocalGPTwithRAG/emma2.wav"
-    process_and_play(prompt2, audio_file_pth2)
-    if  len(conversation_history) > 20:
-        conversation_history = conversation_history[-20:]
+#246
+        print(PINK + "Emma:" + RESET_COLOR)
+        chatbot_response = chatgpt_streamed(user_input, system_message, conversation_history, "lucky", vault_embeddings_tensor, vault_content, model)
+        # print(chatbot_response)
+        prompt2 = chatbot_response
+        audio_file_pth2 = "/Users/nani/git/LocalGPTwithRAG/en_sample.wav"
+        process_and_play(prompt2, audio_file_pth2)
+        conversation_history.append({"role": "assistant", "content": chatbot_response})
+        if  len(conversation_history) > 20:
+            conversation_history = conversation_history[-20:]
 user_chatbot_conversation()
 ### ended program
